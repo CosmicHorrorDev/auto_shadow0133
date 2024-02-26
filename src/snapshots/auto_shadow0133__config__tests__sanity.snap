@@ -1,0 +1,32 @@
+---
+source: src/config.rs
+expression: config
+---
+Config {
+    url_filters: UrlFilters {
+        allow: UrlSet(
+            {
+                "allow": {
+                    "overrides-subdomain": None,
+                    "sub": Some(
+                        {
+                            "a",
+                            "b",
+                        },
+                    ),
+                    "sub-less": None,
+                },
+                "allow2": {
+                    "sub-less": None,
+                },
+            },
+        ),
+        block: UrlSet(
+            {
+                "block": {
+                    "sub-less": None,
+                },
+            },
+        ),
+    },
+}

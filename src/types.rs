@@ -2,6 +2,8 @@ use std::{cmp::Ordering, fmt};
 
 use crate::utils;
 
+use diesel_derive_enum::DbEnum;
+use pulldown_cmark::{CodeBlockKind, Event, LinkType, Tag};
 use smartstring::alias::String as SmallString;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -14,8 +16,157 @@ pub struct Post {
     pub score: f64,
     pub title: String,
     pub created: OffsetDateTime,
-    pub kind: PostKind,
-    pub body: String,
+    pub body: Option<String>,
+    pub link: Option<String>,
+    pub category: Option<Category>,
+}
+
+#[derive(Debug)]
+pub enum Token {
+    Code { lang: Option<Lang>, text: String },
+    Url { text: Option<String>, url: String },
+    Text(String),
+}
+
+impl Token {
+    fn new<'text>(events: Vec<pulldown_cmark::Event<'text>>) -> Vec<Self> {
+        let mut tokens = Vec::new();
+
+        let mut events = events.into_iter();
+        while let Some(event) = events.next() {
+            match event {
+                Event::Start(Tag::Heading(_, Some(t), _)) => tokens.push(Token::Text(t.to_owned())),
+                Event::Start(Tag::CodeBlock(code_block_kind)) => {
+                    let lang = if let CodeBlockKind::Fenced(lang) = code_block_kind {
+                        Lang::new(&lang)
+                    } else {
+                        None
+                    };
+
+                    // Munch text until we see the end codeblock
+                    let mut text = String::new();
+                    while let Some(event) = events.next() {
+                        match event {
+                            Event::Text(t) => {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(&t);
+                            }
+                            Event::End(Tag::CodeBlock(_)) => break,
+                            // Ignore anything else
+                            _ => {}
+                        }
+                    }
+
+                    tokens.push(Token::Code { lang, text });
+                }
+                Event::Start(Tag::Link(LinkType::Inline, url, _)) => {
+                    let url = url.into_string();
+
+                    let mut text = String::new();
+                    while let Some(event) = events.next() {
+                        match event {
+                            Event::Text(t) => {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(&t);
+                            }
+                            Event::End(Tag::Link(LinkType::Inline, _, _)) => break,
+                            // Ignore anything else
+                            _ => {}
+                        }
+                    }
+                    tokens.push(Token::Url { text: Some(text), url })
+                }
+                Event::Text(t) => {
+                    // TODO: this still misses plaintext urls that look like
+                    // Some content: https://google.com
+                    // Should we run a regex over the line, or is it not worth it?
+                    let token = if t.starts_with("https://") && t.split_whitespace().count() == 1 {
+                        Token::Url { text: None, url: t.into_string() }
+                    } else {
+                        Token::Text(t.into_string())
+                    };
+
+                    tokens.push(token);
+                }
+                Event::Code(t) => tokens.push(Token::Code { lang: None, text: t.into_string() }),
+                // Any significant ends should be consumed with their corresponding start
+                Event::End(_) => {}
+                // We don't emit tokens for any of these
+                Event::Html(_)
+                | Event::FootnoteReference(_)
+                | Event::SoftBreak
+                | Event::HardBreak
+                | Event::Rule
+                | Event::TaskListMarker(_)
+                | Event::Start(
+                    Tag::Paragraph
+                    | Tag::Heading(_, None, _)
+                    | Tag::BlockQuote
+                    | Tag::List(_)
+                    | Tag::Item
+                    | Tag::FootnoteDefinition(_)
+                    | Tag::Table(_)
+                    | Tag::TableHead
+                    | Tag::TableRow
+                    | Tag::TableCell
+                    | Tag::Emphasis
+                    | Tag::Strong
+                    | Tag::Strikethrough
+                    // Inline links are handled above
+                    | Tag::Link(_, _, _)
+                    | Tag::Image(_, _, _),
+                ) => {}
+            }
+        }
+
+        tokens
+    }
+}
+
+#[derive(Debug)]
+pub enum Lang {
+    Bash,
+    C,
+    Cpp,
+    Go,
+    Javascript,
+    Python,
+    Rust,
+    Shell,
+}
+
+impl Lang {
+    fn new(tag: &str) -> Option<Self> {
+        match tag {
+            "bash" => Some(Self::Bash),
+            "c" => Some(Self::C),
+            "cpp" => Some(Self::Cpp),
+            "go" => Some(Self::Go),
+            "js" => Some(Self::Javascript),
+            "python" | "py" => Some(Self::Python),
+            "rust" | "rs" => Some(Self::Rust),
+            "sh" => Some(Self::Shell),
+            _ => None,
+        }
+    }
+}
+
+impl Post {
+    pub fn tokens(&self) -> Vec<Token> {
+        self.body
+            .as_deref()
+            .map(|body| {
+                let parser = pulldown_cmark::Parser::new(body);
+                let events: Vec<_> = parser.into_iter().collect();
+
+                Token::new(events)
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl PartialEq for Post {
@@ -46,8 +197,9 @@ impl fmt::Debug for Post {
             score,
             title,
             created,
-            kind,
             body,
+            link,
+            category,
         } = &self;
 
         let mut debug_struct = f.debug_struct("Post");
@@ -59,36 +211,22 @@ impl fmt::Debug for Post {
         debug_struct.field("title", &truncated_title);
 
         debug_struct.field("created", &created.format(&Rfc3339).unwrap());
-        debug_struct.field("kind", kind);
 
-        let truncated_body = utils::truncate_str(body, DEBUG_FIELD_TRUNCATE_LEN);
+        let truncated_body = body
+            .as_deref()
+            .map(|b| utils::truncate_str(b, DEBUG_FIELD_TRUNCATE_LEN));
         debug_struct.field("body", &truncated_body);
+
+        debug_struct.field("link", link);
+        debug_struct.field("category", category);
 
         debug_struct.finish()
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum PostKind {
-    Link,
-    Text,
-}
-
-impl From<i32> for PostKind {
-    fn from(num: i32) -> Self {
-        match num {
-            0 => Self::Link,
-            1 => Self::Text,
-            _ => panic!("Got unexpected i32 for kind"),
-        }
-    }
-}
-
-impl From<PostKind> for i32 {
-    fn from(kind: PostKind) -> Self {
-        match kind {
-            PostKind::Link => 0,
-            PostKind::Text => 1,
-        }
-    }
+#[derive(DbEnum, Clone, Copy, Debug)]
+pub enum Category {
+    Lang,
+    Game,
+    Other,
 }

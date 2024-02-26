@@ -2,10 +2,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::{
-    types::{Post, PostKind},
-    utils,
-};
+use crate::{types::Post, utils};
 
 use roux::{submission::SubmissionData, util::RouxError, Subreddit};
 use smartstring::alias::String as SmallString;
@@ -137,8 +134,8 @@ impl Watcher {
                 }
                 update
             }
-            Err(e) => {
-                tracing::warn!(%e, "You burnt the roux ;-;");
+            Err(error) => {
+                tracing::warn!(%error, "You burnt the roux ;-;");
                 Update::default()
             }
         }
@@ -153,34 +150,48 @@ impl From<SubmissionData> for Post {
             score,
             title,
             selftext,
-            is_self,
             created_utc,
-            url,
+            url: mut maybe_url,
             ..
         }: SubmissionData,
     ) -> Self {
         let created = OffsetDateTime::from_unix_timestamp(created_utc as i64).unwrap();
         let selftext = selftext.trim();
+        let selftext = (!selftext.is_empty()).then_some(selftext);
         let title = title.trim();
 
-        let maybe_url = if is_self {
-            // If the title is a link and there is no body, or the body is just a link then
-            // consider it a link post
-            if selftext.is_empty() && Url::parse(title).is_ok() {
-                Some(title.to_owned())
-            } else if Url::parse(selftext).is_ok() {
-                Some(selftext.to_owned())
-            } else {
-                None
+        if maybe_url.is_none() {
+            // Some people mess up link posting, so if the title is a link and there is no body, or
+            // there is a title, but the body is just a link then consider it a link post
+            let check_as_url = selftext.unwrap_or(title);
+            if Url::parse(check_as_url).is_ok() {
+                maybe_url = Some(check_as_url.to_owned());
             }
-        } else {
-            url
-        };
+        }
 
-        let (kind, body) = match maybe_url {
-            Some(url) => (PostKind::Link, url),
-            None => (PostKind::Text, selftext.to_owned()),
-        };
+        maybe_url = maybe_url.map(|url| {
+            // Resolve crossposts (starting with /r/ or /user/)
+            if url.starts_with("/") {
+                format!("https://reddit.com{url}")
+            } else {
+                url
+            }
+        });
+
+        // URL parsing is pretty permissive, so sanity check to remove garbo
+        if let Some(url) = &maybe_url {
+            match Url::parse(url) {
+                Ok(parsed) => {
+                    if !["http", "https"].contains(&parsed.scheme()) || url.contains(' ') {
+                        maybe_url = None;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, %url, "Valid URL failed parsing!");
+                    maybe_url = None;
+                }
+            }
+        }
 
         Self {
             id: SmallString::from(id),
@@ -188,8 +199,9 @@ impl From<SubmissionData> for Post {
             score,
             title: title.to_owned(),
             created,
-            kind,
-            body,
+            body: selftext.map(ToOwned::to_owned),
+            link: maybe_url,
+            category: None,
         }
     }
 }

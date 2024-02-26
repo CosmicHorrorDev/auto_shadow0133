@@ -5,5 +5,5 @@ CREATE TABLE posts (
     title TEXT NOT NULL,
     created REAL NOT NULL,
     kind INT NOT NULL,
-    body TEXT NOT NULL
-)
+    body TEXT NOT NULL DEFAULT ''
+);
