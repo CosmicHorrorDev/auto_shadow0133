@@ -43,6 +43,8 @@ fn main() -> anyhow::Result<()> {
     let _ = dotenv::dotenv();
 
     log::init()?;
+    config::init_config()?;
+    config::init_secrets()?;
 
     match cli::Args::parse().command {
         cli::Command::Analyze => commands::analyze::run()?,

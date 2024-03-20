@@ -2,10 +2,60 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::PathBuf,
+    sync::OnceLock,
 };
 
 use serde::{de::Error as DeError, Deserialize, Deserializer};
 use url::Url;
+
+static GLOBAL_SECRETS: OnceLock<Secrets> = OnceLock::new();
+
+pub fn init_secrets() -> anyhow::Result<()> {
+    let secrets = Secrets::new()?;
+    GLOBAL_SECRETS.get_or_init(|| secrets);
+    Ok(())
+}
+
+pub fn expect_secrets() -> &'static Secrets {
+    GLOBAL_SECRETS.get().unwrap()
+}
+
+static GLOBAL_CONFIG: OnceLock<Config> = OnceLock::new();
+
+pub fn init_config() -> anyhow::Result<()> {
+    let config = Config::new()?;
+    GLOBAL_CONFIG.get_or_init(|| config);
+    Ok(())
+}
+
+pub fn expect_config() -> &'static Config {
+    GLOBAL_CONFIG.get().unwrap()
+}
+
+#[derive(Deserialize)]
+pub struct Secrets {
+    pub reddit: RedditOauth2,
+}
+
+impl Secrets {
+    pub fn new() -> anyhow::Result<Self> {
+        let secrets_path = env::var("SECRETS_PATH")?;
+
+        tracing::info!(secrets_path, "Reading secrets at path");
+        let secrets_text = fs::read_to_string(&secrets_path)?;
+        let secrets = toml::from_str(&secrets_text)?;
+
+        Ok(secrets)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RedditOauth2 {
+    pub client_id: String,
+    pub client_secret: String,
+    pub username: String,
+    pub password: String,
+}
 
 #[derive(Deserialize, Debug)]
 pub struct Config {

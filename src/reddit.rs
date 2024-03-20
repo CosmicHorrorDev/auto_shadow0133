@@ -22,7 +22,7 @@ impl Update {
 }
 
 trait PostSource {
-    fn posts(&self) -> Result<BTreeSet<Post>, RouxError>;
+    fn posts(&mut self) -> Result<BTreeSet<Post>, RouxError>;
 }
 
 struct RustSubreddit {
@@ -31,17 +31,29 @@ struct RustSubreddit {
 
 impl RustSubreddit {
     fn new() -> Self {
-        Self {
-            inner: Subreddit::new("rust"),
-        }
+        let secrets = crate::config::expect_secrets();
+        let user_agent = concat!(
+            "AutoShadow0133:",
+            env!("CARGO_PKG_VERSION"),
+            " from https://github.com/CosmicHorrorDev/auto_shadow0133"
+        );
+        let inner = roux::Reddit::new(
+            user_agent,
+            &secrets.reddit.client_id,
+            &secrets.reddit.client_secret,
+        )
+        .username(&secrets.reddit.username)
+        .password(&secrets.reddit.password)
+        .subreddit("rust")
+        .unwrap();
+        Self { inner }
     }
 }
 
 impl PostSource for RustSubreddit {
-    fn posts(&self) -> Result<BTreeSet<Post>, RouxError> {
-        self.inner
-            .latest(NUM_LATEST_POSTS, None)
-            .map(|submissions| {
+    fn posts(&mut self) -> Result<BTreeSet<Post>, RouxError> {
+        fn try_fetch(sub: &Subreddit) -> Result<BTreeSet<Post>, RouxError> {
+            sub.latest(NUM_LATEST_POSTS, None).map(|submissions| {
                 submissions
                     .data
                     .children
@@ -49,11 +61,20 @@ impl PostSource for RustSubreddit {
                     .map(|container| Post::from(container.data))
                     .collect()
             })
+        }
+
+        try_fetch(&self.inner).or_else(|_| {
+            // Refresh our auth and try again on failure since it seems like auth can start failing
+            // over time
+            tracing::info!("Attempting to refresh auth");
+            *self = Self::new();
+            try_fetch(&self.inner)
+        })
     }
 }
 
 const NUM_LATEST_POSTS: u32 = 20;
-const ID_BUFFER: usize = NUM_LATEST_POSTS as usize + 100;
+const ID_BUFFER: usize = NUM_LATEST_POSTS as usize + 300;
 
 pub struct Watcher {
     source: Box<dyn PostSource>,

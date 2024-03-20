@@ -1,5 +1,5 @@
 use super::{Context, Status};
 
-pub fn filter(ctx: Context) -> Option<Status> {
+pub fn filter(_: Context) -> Option<Status> {
     None
 }

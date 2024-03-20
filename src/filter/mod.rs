@@ -3,7 +3,7 @@ mod contains_rust_code;
 mod known_youtube_channel;
 mod reputable_author;
 
-use std::slice;
+use std::{slice, time::Instant};
 
 use crate::{
     config::Config,
@@ -35,9 +35,12 @@ impl Iterator for FilterIter<'_> {
     type Item = (Filter, Option<Status>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next()
-            .map(|filter| (*filter, (filter.1)(self.context)))
+        self.iter.next().map(|filter| {
+            let start = Instant::now();
+            let maybe_status = (filter.1)(self.context);
+            tracing::debug!("Filter {} took {:?}", filter.name(), start.elapsed());
+            (*filter, maybe_status)
+        })
     }
 }
 

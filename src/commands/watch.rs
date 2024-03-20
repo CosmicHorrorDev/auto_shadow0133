@@ -7,7 +7,7 @@ const EVENT_LOOP_SLEEP_SEC: u64 = 60;
 pub fn run() -> anyhow::Result<()> {
     let mut watcher = reddit::Watcher::new();
     let db = database::Database::new()?;
-    let config = config::Config::new()?;
+    let config = config::expect_config();
 
     let mut num_ham = 0;
     let mut num_spam = 0;

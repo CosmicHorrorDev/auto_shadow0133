@@ -1,3 +1,4 @@
 /target
 posts.db
 .env
+secrets.toml

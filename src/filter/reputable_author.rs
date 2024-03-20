@@ -9,7 +9,7 @@ pub fn filter(Context { post, database, .. }: Context) -> Option<Status> {
         .get_num_posts_with_author_and_min_karma(&post.author, KARMA_THRESHOLD)
         .ok()?;
 
-    if num_posts > NUM_POSTS_THRESHOLD {
+    if num_posts >= NUM_POSTS_THRESHOLD {
         Some(Status::Ham(HamReason::ReputableAuthor {
             author: post.author.to_string(),
             num_reputable_posts: num_posts,
